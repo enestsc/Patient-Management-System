@@ -1,0 +1,161 @@
+version: "3.9"
+
+services:
+  # ------------------ DATABASES ------------------
+
+  patient-service-db:
+    image: postgres:latest
+    container_name: patient-service-db
+    environment:
+      POSTGRES_DB: pm
+      POSTGRES_USER: admin_ps
+      POSTGRES_PASSWORD: pass
+    ports:
+      - "5433:5432"    # host:container (isteğe bağlı, dışarıdan bağlanacaksan)
+    volumes:
+      - ./db_volumes/patient-service-db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin_ps -d pm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  auth-service-db:
+    image: postgres:latest
+    container_name: auth-service-db
+    environment:
+      POSTGRES_DB: pm
+      POSTGRES_USER: admin_ps
+      POSTGRES_PASSWORD: pass
+    ports:
+      - "5434:5432"
+    volumes:
+      - ./db_volumes/auth-service-db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin_ps -d pm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ------------------ KAFKA ------------------
+
+  kafka:
+    image: apache/kafka:latest   # senin kullandığın image neyse onu koy
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+      - "9094:9094"
+    environment:
+      CLUSTER_ID: "5L6g3nShT-eMCtK--X86sw"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094"
+      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+      KAFKA_LOG_FLUSH_INTERVAL_MESSAGES: "1"
+      KAFKA_LOG_FLUSH_INTERVAL_MS: "1000"
+      KAFKA_LOG_RETENTION_BYTES: "-1"
+      KAFKA_LOG_RETENTION_HOURS: "168"
+      KAFKA_LOG_SEGMENT_BYTES: "1073741824"
+      KAFKA_MIN_INSYNC_REPLICAS: "1"
+      KAFKA_NODE_ID: "1"
+      KAFKA_NUM_PARTITIONS: "1"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+
+  # ------------------ MICROSERVICES ------------------
+
+  patient-service:
+    build:
+      context: ./patient-service
+      dockerfile: Dockerfile
+    container_name: patient-service
+    depends_on:
+      patient-service-db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    environment:
+      # senin verdiğin env’ler
+      BILLING_SERVICE_ADDRESS: billing-service
+      BILLING_SERVICE_GRPC_PORT: 9001
+      SPRING_DATASOURCE_PASSWORD: pass
+      SPRING_DATASOURCE_URL: jdbc:postgresql://patient-service-db:5432/pm
+      SPRING_DATASOURCE_USERNAME: admin_ps
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_SQL_INIT_MODE: always
+    ports:
+      - "4000:4000"     # app içinde server.port=4000
+
+  billing-service:
+    build:
+      context: ./billing-service
+      dockerfile: Dockerfile
+    container_name: billing-service
+    depends_on:
+      patient-service-db:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_PASSWORD: pass
+      SPRING_DATASOURCE_URL: jdbc:postgresql://patient-service-db:5432/pm
+      SPRING_DATASOURCE_USERNAME: admin_ps
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    ports:
+      - "9001:9001"     # gRPC port; patient-service buraya container içi 9001 ile bağlanıyor
+      - "4001:4001"     # REST port; istersen dışarı açabilirsin
+
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: auth-service
+    depends_on:
+      auth-service-db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    environment:
+      JWT_SECRET: 8a4b92d83d0002119f582288ce7c6a236f6dba8c827bc17b08f0cc5755276abc
+      SPRING_DATASOURCE_PASSWORD: pass
+      SPRING_DATASOURCE_URL: jdbc:postgresql://auth-service-db:5432/pm
+      SPRING_DATASOURCE_USERNAME: admin_ps
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_SQL_INIT_MODE: always
+    ports:
+      - "4005:4005"     # app içinde server.port=4005 olmalı
+
+  analytics-service:
+    build:
+      context: ./analytics-service
+    container_name: analytics-service
+    depends_on:
+      kafka:
+        condition: service_started
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "4002:4002"     # varsayım; uygulamada neyse ona göre ayarla
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    depends_on:
+      patient-service:
+        condition: service_started
+      auth-service:
+        condition: service_started
+    environment:
+      # senin verdiğin env
+      AUTH_SERVICE_URL: http://auth-service:4005
+    ports:
+      - "4004:4004"     # gateway server.port=4004

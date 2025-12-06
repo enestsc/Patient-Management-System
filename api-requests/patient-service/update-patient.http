@@ -1,0 +1,11 @@
+### Updates request to existing patient
+PUT localhost:4000/patients/123e4567-e89b-12d3-a456-426614174000
+Content-Type: application/json
+
+{
+  "name": "John Doe Updated",
+  "email": "john.doe@example.com",
+  "address": "Sokullu Mehmet Paşa",
+  "dateOfBirth": "2004-03-26"
+}
+###

@@ -1,0 +1,13 @@
+### POST request to create patient
+POST http://localhost:4004/api/patients
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Billing Test",
+  "email": "billing@example.com",
+  "address": "Sokullu Mehmet Pasa",
+  "dateOfBirth": "2004-03-26"
+}
+
+###
